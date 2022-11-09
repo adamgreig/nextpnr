@@ -190,10 +190,108 @@ bool Arch::isBelLocationValid(BelId bel) const
         } else if (cell->type.in(id_DCUA, id_EXTREFB, id_PCSCLKDIV)) {
             return args.type != ArchArgs::LFE5U_25F && args.type != ArchArgs::LFE5U_45F &&
                    args.type != ArchArgs::LFE5U_85F;
+        } else if (cell->type.in(id_MULT18X18D, id_ALU54B)) {
+            return is_dsp_location_valid(cell);
         } else {
             return true;
         }
     }
+}
+
+// Check if this DSP bel configuration would result in more than four
+// distinct clock/ce/rst per block of two DSP slices.
+bool Arch::is_dsp_location_valid(CellInfo* cell) const
+{
+    auto ctx = getCtx();
+    BelId bel = cell->bel;
+
+    int block_x = cell->getLocation().x - cell->getLocation().z;
+    int y = bel.location.y;
+
+    log_info("DSP bel: x=%d y=%d x0=%d\n", bel.location.x, bel.location.y, block_x);
+    log_info("DSP cell: name=%s type=%s\n", cell->name.c_str(ctx), cell->type.c_str(ctx));
+
+    // Store the first nets found for CLK0-4, CE0-4, RST0-4.
+    NetInfo *block_ports[12] = {};
+
+    // Check what nets are connected to each MULT18X18D or ALU54B.
+    for (auto dx : {0, 1, 3, 4, 5, 7}) {
+        BelId bel_dsp = getBelByLocation(Loc(block_x + dx, y, dx));
+        if(bel_dsp == BelId()) continue;
+        CellInfo* cell_dsp = getBoundBelCell(bel_dsp);
+        if(cell_dsp == nullptr) continue;
+
+        std::array<IdString, 12> ports = {
+            id_CLK0, id_CLK1, id_CLK2, id_CLK3,
+            id_CE0, id_CE1, id_CE2, id_CE3,
+            id_RST0, id_RST1, id_RST2, id_RST3
+        };
+        for (int i=0; i<12; i++) {
+            IdString port = ports[i];
+            NetInfo *net = cell_dsp->ports.at(port).net;
+            if(net == nullptr) continue;
+            if(block_ports[i] == nullptr) {
+                block_ports[i] = net;
+                continue;
+            } else if(net != block_ports[i]) {
+                log_info("i=%d net=%p block_ports[%d]=%p\n", i, net, i, block_ports[i]);
+                log_info("DSP block signal %s cannot be used for net '%s' "
+                          "in %s '%s', as it is already connected to net "
+                          "'%s'.\n",
+                          port.c_str(ctx),
+                          net->name.c_str(ctx),
+                          cell_dsp->type.c_str(ctx),
+                          cell_dsp->name.c_str(ctx),
+                          block_ports[i]->name.c_str(ctx));
+                return false;
+            }
+        }
+    }
+
+    BelId bel_m0 = getBelByLocation(Loc(block_x + 0, y, 0));
+    BelId bel_m1 = getBelByLocation(Loc(block_x + 1, y, 1));
+    BelId bel_a3 = getBelByLocation(Loc(block_x + 3, y, 3));
+    BelId bel_m4 = getBelByLocation(Loc(block_x + 4, y, 4));
+    BelId bel_m5 = getBelByLocation(Loc(block_x + 5, y, 5));
+    BelId bel_a7 = getBelByLocation(Loc(block_x + 7, y, 7));
+
+    if(bel_m0 != BelId()) {
+        CellInfo* cell_m0 = getBoundBelCell(bel_m0);
+        if(cell_m0) log_info("    m0: x=%d idx=%d name=%s type=%s\n", bel_m0.location.x, bel_m0.index, cell_m0->name.c_str(ctx), cell_m0->type.c_str(ctx));
+        else log_info("    m0: x=%d idx=%d\n", bel_m0.location.x, bel_m0.index);
+    }
+
+    if(bel_m1 != BelId()) {
+        CellInfo* cell_m1 = getBoundBelCell(bel_m1);
+        if(cell_m1) log_info("    m1: x=%d idx=%d name=%s type=%s\n", bel_m1.location.x, bel_m1.index, cell_m1->name.c_str(ctx), cell_m1->type.c_str(ctx));
+        else log_info("    m1: x=%d idx=%d\n", bel_m1.location.x, bel_m1.index);
+    }
+
+    if(bel_a3 != BelId()) {
+        CellInfo* cell_a3 = getBoundBelCell(bel_a3);
+        if(cell_a3) log_info("    a3: x=%d idx=%d name=%s type=%s\n", bel_a3.location.x, bel_a3.index, cell_a3->name.c_str(ctx), cell_a3->type.c_str(ctx));
+        else log_info("    a3: x=%d idx=%d\n", bel_a3.location.x, bel_a3.index);
+    }
+
+    if(bel_m4 != BelId()) {
+        CellInfo* cell_m4 = getBoundBelCell(bel_m4);
+        if(cell_m4) log_info("    m4: x=%d idx=%d name=%s type=%s\n", bel_m4.location.x, bel_m4.index, cell_m4->name.c_str(ctx), cell_m4->type.c_str(ctx));
+        else log_info("    m4: x=%d idx=%d\n", bel_m4.location.x, bel_m4.index);
+    }
+
+    if(bel_m5 != BelId()) {
+        CellInfo* cell_m5 = getBoundBelCell(bel_m5);
+        if(cell_m5) log_info("    m5: x=%d idx=%d name=%s type=%s\n", bel_m5.location.x, bel_m5.index, cell_m5->name.c_str(ctx), cell_m5->type.c_str(ctx));
+        else log_info("    m5: x=%d idx=%d\n", bel_m5.location.x, bel_m5.index);
+    }
+
+    if(bel_a7 != BelId()) {
+        CellInfo* cell_a7 = getBoundBelCell(bel_a7);
+        if(cell_a7) log_info("    a7: x=%d idx=%d name=%s type=%s\n", bel_a7.location.x, bel_a7.index, cell_a7->name.c_str(ctx), cell_a7->type.c_str(ctx));
+        else log_info("    a7: x=%d idx=%d\n", bel_a7.location.x, bel_a7.index);
+    }
+
+    return true;
 }
 
 void Arch::setup_wire_locations()
