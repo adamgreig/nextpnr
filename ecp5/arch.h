@@ -1088,6 +1088,9 @@ struct Arch : BaseArch<ArchRanges>
 
     // -------------------------------------------------
     bool is_dsp_location_valid(CellInfo* cell) const;
+    void remap_dsp_blocks();
+    void remap_dsp_cell(CellInfo* ci, const std::array<IdString, 4> &ports,
+                        std::array<NetInfo*, 4> &assigned_nets);
 };
 
 NEXTPNR_NAMESPACE_END
