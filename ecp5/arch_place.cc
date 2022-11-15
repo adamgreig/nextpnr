@@ -202,8 +202,6 @@ bool Arch::isBelLocationValid(BelId bel) const
 // CLK/CE/RST signals per block of two DSP slices.
 bool Arch::is_dsp_location_valid(CellInfo* cell) const
 {
-    auto ctx = getCtx();
-
     // Find the location of the DSP0 tile.
     int block_x = cell->getLocation().x - cell->getLocation().z;
     int block_y = cell->getLocation().y;
@@ -242,8 +240,8 @@ bool Arch::is_dsp_location_valid(CellInfo* cell) const
                     if (cells_locked) {
                         log_error("DSP block containing %s '%s' has more than "
                                   "four distinct %s signals.\n",
-                                  dsp_cell->type.c_str(ctx),
-                                  dsp_cell->name.c_str(ctx),
+                                  dsp_cell->type.c_str(getCtx()),
+                                  dsp_cell->name.c_str(getCtx()),
                                   port_names[i]);
                     }
                     return false;
@@ -261,7 +259,7 @@ void Arch::remap_dsp_blocks()
 {
     std::set<Location> processed_blocks;
 
-    const std::array<std::array<IdString, 4>, 3> remap_ports = {{
+    const std::array<std::array<IdString, 4>, 3> block_ports = {{
         {id_CLK0, id_CLK1, id_CLK2, id_CLK3},
         {id_CE0, id_CE1, id_CE2, id_CE3},
         {id_RST0, id_RST1, id_RST2, id_RST3},
@@ -279,7 +277,7 @@ void Arch::remap_dsp_blocks()
             continue;
         processed_blocks.insert(block_loc);
 
-        for (auto &ports : remap_ports) {
+        for (auto &ports : block_ports) {
             // Store assigned nets for each port.
             std::array<NetInfo*, 4> assigned_nets = {};
 
@@ -325,7 +323,7 @@ void Arch::remap_dsp_cell(
     std::array<IdString, 4> remap_ports = {};
 
     // Parameters that might need updating when ports are remapped.
-    const std::array<IdString, 52> remap_params = {
+    const std::array<IdString, 48> remap_params = {
         id_REG_INPUTA_CLK, id_REG_INPUTA_CE, id_REG_INPUTA_RST,
         id_REG_INPUTB_CLK, id_REG_INPUTB_CE, id_REG_INPUTB_RST,
         id_REG_INPUTC_CLK, id_REG_INPUTC_CE, id_REG_INPUTC_RST,
@@ -343,12 +341,11 @@ void Arch::remap_dsp_cell(
         id_REG_OUTPUT1_CLK, id_REG_OUTPUT1_CE, id_REG_OUTPUT1_RST,
         id_REG_FLAG_CLK, id_REG_FLAG_CE, id_REG_FLAG_RST,
         id_REG_INPUTCFB_CLK, id_REG_INPUTCFB_CE, id_REG_INPUTCFB_RST,
-        id_CLK0_DIV, id_CLK1_DIV, id_CLK2_DIV, id_CLK3_DIV, id_HIGHSPEED_CLK,
+        id_HIGHSPEED_CLK,
     };
 
-    // First pass: go through each port and determine which new port
-    // to assign its net to, and what to remap any parmeters that
-    // reference it.
+    // First, go through each port and determine which new port to assign
+    // its net to, and what to remap any parmeters that reference it.
     for (size_t i = 0; i < ports.size(); i++) {
         IdString port = ports[i];
         NetInfo *net = ci->ports.at(port).net;
@@ -395,7 +392,7 @@ void Arch::remap_dsp_cell(
         }
     }
 
-    // Second pass: connect each port to its assigned net.
+    // Second, connect each port to its assigned net.
     for (size_t i = 0; i < ports.size(); i++) {
         IdString port = ports[i];
         ci->disconnectPort(port);
@@ -404,19 +401,49 @@ void Arch::remap_dsp_cell(
         }
     }
 
-    // Third pass: remap any parameters that refer to old ports to refer
-    // to the new port instead.
+    // Third, remap any parameters that refer to old ports to refer to the
+    // new port instead.
     for (auto remap_param : remap_params) {
         auto param = ci->params.find(remap_param);
-        if (param == std::end(ci->params))
+        if (param == ci->params.end())
             continue;
-        for (size_t i = 0; i < ports.size(); i++) {
-            if (remap_ports[i] != IdString()) {
-                Property &prop = param->second;
-                if (prop.is_string && prop.str == ports[i].str(getCtx())) {
-                    prop = Property(remap_ports[i].str(getCtx()));
-                    break;
-                }
+        for (size_t i = 0; i < remap_ports.size(); i++) {
+            Property &prop = param->second;
+            if (remap_ports[i] != IdString()
+                && prop.is_string
+                && prop.str == ports[i].str(getCtx())
+            ) {
+                prop = Property(remap_ports[i].str(getCtx()));
+                break;
+            }
+        }
+    }
+
+    // Finally, only when remapping CLK ports, also move any `CLKn_DIV`
+    // to the new clock port.
+    const std::array<IdString, 4> clk_div_params = {
+        id_CLK0_DIV, id_CLK1_DIV, id_CLK2_DIV, id_CLK3_DIV};
+    std::array<Property, 4> new_clk_div_props = {};
+    if (ports[0] == id_CLK0) {
+        for (size_t i = 0; i < 4; i++) {
+            if (remap_ports[i] == IdString())
+                continue;
+            auto param = ci->params.find(clk_div_params[i]);
+            if (param == ci->params.end())
+                continue;
+            size_t j = std::distance(
+                ports.cbegin(),
+                std::find(ports.cbegin(), ports.cend(), remap_ports[i]));
+            if (j != ports.size()) {
+                new_clk_div_props[j] = param->second;
+            }
+        }
+
+        for (size_t i = 0; i < 4; i++) {
+            if (new_clk_div_props[i].is_string) {
+                ci->params[clk_div_params[i]] = new_clk_div_props[i];
+            } else {
+                ci->params.erase(clk_div_params[i]);
             }
         }
     }
